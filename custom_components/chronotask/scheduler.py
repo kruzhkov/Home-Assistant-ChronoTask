@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+from typing import Callable
 
 from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -41,10 +42,10 @@ class WeeklyScheduler:
         self.hass = hass
         self.storage = storage
         self.planner_id = planner_id
-        self._unsubs: dict[str, callable] = {}
+        self._unsubs: dict[str, Callable[[], None]] = {}
         # Timer di scadenza delle pause: separati da quelli delle regole, così
         # async_reschedule_all() non li tocca.
-        self._hold_unsubs: dict[str, callable] = {}
+        self._hold_unsubs: dict[str, Callable[[], None]] = {}
 
     async def async_stop(self) -> None:
         """Cancella tutti i timer (regole e pause): usato allo scaricamento."""
@@ -78,20 +79,43 @@ class WeeklyScheduler:
         if part == "start":
             if not rule.get(CONF_SERVICE) or not rule.get(CONF_START):
                 return
-            day, hm = int(rule[CONF_DAY]), rule[CONF_START]
+            raw_day, hm = rule.get(CONF_DAY), rule[CONF_START]
         else:
             if not rule.get(CONF_END) or not rule.get(CONF_END_SERVICE):
                 return
-            day = effective_end_day(
-                rule[CONF_DAY], rule.get(CONF_START), rule[CONF_END], rule.get(CONF_END_DAY)
+            raw_day, hm = rule.get(CONF_DAY), rule[CONF_END]
+
+        # Un day mancante/non numerico non deve far cadere tutta la
+        # ripianificazione (async_reschedule_all): si salta solo questa fascia.
+        try:
+            day = int(raw_day)
+        except (TypeError, ValueError):
+            _LOGGER.warning(
+                "ChronoTask: giorno non valido '%s' per la regola '%s' (%s): fascia ignorata",
+                raw_day, rule.get(ATTR_ID), part,
             )
-            hm = rule[CONF_END]
+            return
+
+        if part == "end":
+            day = effective_end_day(
+                day, rule.get(CONF_START), rule.get(CONF_END), rule.get(CONF_END_DAY)
+            )
+
         parsed = parse_hm(hm)
         if parsed is None:
             _LOGGER.warning("ChronoTask: orario non valido '%s'", hm)
             return
         next_local = next_occurrence(dt_util.now(), day, parsed)
         key = f"{rule.get(ATTR_ID)}:{rule.get('_slot_index', 0)}:{part}"
+
+        # Sostituendo il timer dello stesso slot bisogna prima cancellare quello
+        # vecchio, altrimenti resterebbe attivo e scattarebbe due volte.
+        old = self._unsubs.pop(key, None)
+        if old is not None:
+            try:
+                old()
+            except Exception:  # noqa: BLE001
+                pass
 
         # Copia della regola al momento della pianificazione: evita riferimenti stale
         rule_snapshot = dict(rule)
@@ -124,6 +148,12 @@ class WeeklyScheduler:
             # facciamo nulla: qualunque modifica alla regola passa comunque
             # da async_reschedule_all(), che si autoripara.
             slot_idx = rule.get("_slot_index", 0)
+
+            # Il timer appena scattato è già consumato: va tolto dalla mappa,
+            # altrimenti _unsubs cresce e conserva riferimenti morti.
+            key = f"{rule.get(ATTR_ID)}:{slot_idx}:{part}"
+            self._unsubs.pop(key, None)
+
             fresh_rules = expand_rules(self.storage.list_rules())
             fresh = next(
                 (

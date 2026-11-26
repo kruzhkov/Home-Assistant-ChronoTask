@@ -18,6 +18,7 @@ from .const import (
     CONF_START,
     CONF_END,
     CONF_ENABLED,
+    CONF_SERVICE,
     ATTR_ID,
     CONF_END_DAY,
 )
@@ -54,7 +55,9 @@ def _build_event(rule: dict, base_date) -> CalendarEvent | None:
         return CalendarEvent(
             start=start,
             end=end,
-            summary=rule.get(CONF_TITLE) or "Action",
+            # Senza titolo si mostra il servizio: l'evento resta riconoscibile
+            # e non si usa una stringa inglese fissa ("Action").
+            summary=rule.get(CONF_TITLE) or rule.get(CONF_SERVICE) or "",
             uid=f"{rule.get(ATTR_ID)}-{rule.get('_slot_index', 0)}-{start.date()}",
         )
     except Exception:  # noqa: BLE001
@@ -73,7 +76,13 @@ def _events_between(rules: list[dict], start, end) -> list[CalendarEvent]:
     while day <= last:
         weekday = day.weekday()
         for rule in rules:
-            if int(rule[CONF_DAY]) != weekday:
+            # Un day mancante/non numerico non deve far fallire l'intero
+            # calendario: si salta la singola fascia.
+            try:
+                rule_day = int(rule.get(CONF_DAY))
+            except (TypeError, ValueError):
+                continue
+            if rule_day != weekday:
                 continue
             ev = _build_event(rule, day)
             if ev is None or ev.end < start or ev.start > end:
@@ -92,6 +101,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class EntryPlannerCalendar(CalendarEntity):
+    # Lo stato è spinto dall'evento sul bus: nessun polling periodico.
+    _attr_should_poll = False
+
     def __init__(self, hass: HomeAssistant, entry_id: str, name: str) -> None:
         self.hass = hass
         self._entry_id = entry_id
