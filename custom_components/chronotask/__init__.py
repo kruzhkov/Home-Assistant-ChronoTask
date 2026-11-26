@@ -13,8 +13,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 
 from .const import (
+    ALL_SERVICES,
     DOMAIN,
     CONF_NAME,
+    SERVICE_ADD,
     URL_BASE,
     FRONTEND_DIR,
     FRONTEND_URL,
@@ -121,7 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Registra i servizi una sola volta usando il check idiomatico di HA
-    if not hass.services.has_service(DOMAIN, "add_rule"):
+    if not hass.services.has_service(DOMAIN, SERVICE_ADD):
         await async_setup_services(hass)
 
     # Pause (hold): quelle scadute durante lo spegnimento si tolgono senza
@@ -148,4 +150,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ctx = hass.data[DOMAIN].pop(entry.entry_id, None)
         if isinstance(ctx, dict) and ctx.get("scheduler"):
             await ctx["scheduler"].async_stop()
+
+        # Ultimo planner rimosso: via anche i servizi, altrimenti restano
+        # registrati e ogni chiamata fallirebbe con "planner non trovato".
+        if not hass.data.get(DOMAIN):
+            hass.data.pop(DOMAIN, None)
+            for service in ALL_SERVICES:
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Rimozione definitiva dell'entry: cancella le regole salvate su disco."""
+    await PlannerStorage(hass, entry.entry_id).async_remove_store()

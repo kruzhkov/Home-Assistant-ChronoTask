@@ -122,6 +122,18 @@ class PlannerStorage:
         """Rimuove tutte le regole (le pause restano: sono per entità)."""
         self._data["rules"] = []
 
+    async def async_remove_store(self) -> None:
+        """Cancella il file di storage del planner (rimozione dell'entry).
+
+        Senza questo, rimuovendo e ricreando un planner con lo stesso nome
+        l'unique_id resta lo stesso e le vecchie regole ricomparirebbero.
+        """
+        try:
+            await self._store.async_remove()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("ChronoTask: impossibile cancellare lo storage: %s", err)
+        self._data = {"rules": [], "holds": {}}
+
     # --- pause (hold) -----------------------------------------------------
 
     def list_holds(self) -> dict[str, dict]:

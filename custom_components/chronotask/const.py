@@ -83,6 +83,26 @@ SERVICE_IMPORT = "import_rules"
 SERVICE_HOLD = "hold"
 SERVICE_RESUME = "resume"
 SERVICE_RESYNC = "resync"
+
+# Tutti i servizi registrati: usato per rimuoverli quando l'ultimo planner
+# viene eliminato, così non restano servizi "fantasma" che rispondono con
+# "planner non trovato".
+ALL_SERVICES = (
+    SERVICE_ADD,
+    SERVICE_UPDATE,
+    SERVICE_REMOVE,
+    SERVICE_CLEAR,
+    SERVICE_RUN_NOW,
+    SERVICE_RESCHEDULE,
+    SERVICE_ENABLE_TAG,
+    SERVICE_DISABLE_TAG,
+    SERVICE_EXPORT,
+    SERVICE_IMPORT,
+    SERVICE_HOLD,
+    SERVICE_RESUME,
+    SERVICE_RESYNC,
+)
+
 EXPORT_FORMAT = "chronotask-export"
 EXPORT_VERSION = 1
 

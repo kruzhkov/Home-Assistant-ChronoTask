@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
 
@@ -15,12 +16,21 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
     planner = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([PlannerRulesSensor(entry.entry_id, planner["name"])], True)
+    # L'aggiornamento iniziale lo fa async_added_to_hass: update_before_add
+    # eviterebbe solo un doppio async_update() all'avvio.
+    async_add_entities(
+        [PlannerRulesSensor(entry.entry_id, planner["name"])], update_before_add=False
+    )
 
 
 class PlannerRulesSensor(SensorEntity):
     _attr_icon = "mdi:calendar-clock"
     _attr_should_poll = False
+    # Nome composto "<planner> Rules": la parte finale è tradotta (entity.sensor
+    # .rules.name in strings.json/translations), così in italiano diventa
+    # "<planner> Regole" invece di restare in inglese per tutti.
+    _attr_has_entity_name = True
+    _attr_translation_key = "rules"
     # Nessuna unità di misura: il valore è un conteggio di regole e una unità
     # localizzata (es. "regole") resterebbe in italiano per tutti gli utenti.
     # Attributi grandi e che cambiano spesso: non servono nello storico, le
@@ -30,7 +40,6 @@ class PlannerRulesSensor(SensorEntity):
     def __init__(self, entry_id: str, name: str) -> None:
         self._entry_id = entry_id
         self._name = name
-        self._attr_name = f"{name} Rules"
         self._attr_unique_id = f"{PLANNER_SENSOR_SUFFIX}_{entry_id}"
         self._capabilities = {"end_action": True, "tags": True, "multi_slot": True, "hold": True}
         self._unsub = None
@@ -89,6 +98,17 @@ class PlannerRulesSensor(SensorEntity):
             }
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("ChronoTask: errore aggiornamento sensore: %s", err)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        # Stesso device del calendario (identifiers = entry_id): sensore e
+        # calendario dello stesso planner compaiono raggruppati.
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry_id)},
+            name=self._name,
+            manufacturer="Custom",
+            model="ChronoTask",
+        )
 
     def _schedule_next_refresh(self, entities: dict) -> None:
         """Riaggiorna 'entities' al prossimo cambio di stato di qualunque entità,
