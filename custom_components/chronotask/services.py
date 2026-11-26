@@ -146,6 +146,15 @@ _IMPORT_KEYS = (
     CONF_ENABLED, CONF_TAGS, CONF_COLOR, CONF_ICON,
 )
 
+# Campi realmente persistiti in una regola. I servizi usano extra=ALLOW_EXTRA
+# (le card mandano anche planner_id/rule_id/uid/ui_color): senza questo filtro
+# quei campi venivano salvati dentro la regola e poi restituiti da export/sensore.
+_RULE_KEYS = _IMPORT_KEYS
+
+# Campi opzionali che si possono cancellare inviandoli vuoti ("" o None):
+# nella regola non devono restare come stringa vuota, vanno rimossi.
+_CLEAR_ON_EMPTY = (CONF_END, CONF_END_DAY, CONF_COLOR, CONF_ICON, CONF_END_SERVICE)
+
 _HOLD_SCHEMA = vol.All(
     _BASE_PLANNER.extend({
         vol.Required("entity_id"): cv.entity_ids,
@@ -252,8 +261,18 @@ def _commit(hass: HomeAssistant, pid: str) -> None:
 
 def _strip_empty_optional_fields(data: dict) -> dict:
     """Rimuove i campi opzionali con stringa vuota dal dict della regola."""
-    optional_str_fields = (CONF_END, CONF_END_DAY, CONF_COLOR, CONF_ICON)
-    return {k: v for k, v in data.items() if not (k in optional_str_fields and v == "")}
+    return {k: v for k, v in data.items() if not (k in _CLEAR_ON_EMPTY and v == "")}
+
+
+def _split_clears(data: dict) -> tuple[dict, set[str]]:
+    """Separa i campi opzionali inviati esplicitamente vuoti.
+
+    In update_rule un campo opzionale assente significa "non toccarlo", mentre
+    ``""``/``None`` significa "cancellalo": senza questa distinzione icona,
+    colore, fine fascia e servizio di fine non si potevano più rimuovere.
+    """
+    removals = {k for k in _CLEAR_ON_EMPTY if k in data and data[k] in ("", None)}
+    return {k: v for k, v in data.items() if k not in removals}, removals
 
 
 def _clean_slot(slot: dict) -> dict:
@@ -293,9 +312,10 @@ def _planners_for_entities(
 
 def _prepare_rule(raw: dict) -> dict:
     """Normalizza una regola già validata dallo schema (add_rule e import):
-    campi vuoti rimossi, tag normalizzati, service_data ripulito, fasce
-    allineate ai campi flat e id garantito."""
-    data = _strip_empty_optional_fields(dict(raw))
+    campi estranei scartati, campi vuoti rimossi, tag normalizzati,
+    service_data ripulito, fasce allineate ai campi flat e id garantito."""
+    data = {k: v for k, v in dict(raw).items() if k in _RULE_KEYS}
+    data = _strip_empty_optional_fields(data)
     data[CONF_TAGS] = _normalize_tags(data.get(CONF_TAGS))
     data[CONF_SERVICE_DATA] = _sanitize_service_data(
         data.get(CONF_SERVICE), data.get(CONF_SERVICE_DATA)
@@ -355,7 +375,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         pid = _require_planner(hass, call)
         storage = hass.data[DOMAIN][pid]["storage"]
 
-        data = _strip_empty_optional_fields(dict(call.data))
+        # Solo i campi di una regola (niente planner_id/rule_id/uid/ui_color
+        # arrivati dalle card) e, tra questi, i vuoti espliciti come rimozioni.
+        raw = {k: v for k, v in dict(call.data).items() if k in _RULE_KEYS}
+        data, removals = _split_clears(raw)
         rid = data.get(ATTR_ID)
 
         rules = storage.list_rules()
@@ -373,6 +396,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             eff_sd = data.get(CONF_SERVICE_DATA, rule.get(CONF_SERVICE_DATA))
             data[CONF_SERVICE_DATA] = _sanitize_service_data(eff_service, eff_sd)
 
+        if CONF_END_SERVICE in removals:
+            # Cancellare l'azione di fine significa cancellarne anche i dati.
+            removals.add(CONF_END_SERVICE_DATA)
+
         if CONF_END_SERVICE_DATA in data or CONF_END_SERVICE in data:
             eff_eservice = data.get(CONF_END_SERVICE, rule.get(CONF_END_SERVICE))
             eff_esd = data.get(CONF_END_SERVICE_DATA, rule.get(CONF_END_SERVICE_DATA))
@@ -380,6 +407,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 data[CONF_END_SERVICE_DATA] = _sanitize_service_data(eff_eservice, eff_esd)
             else:
                 data.pop(CONF_END_SERVICE_DATA, None)
+                removals.add(CONF_END_SERVICE_DATA)
 
         # Multi-slot: "slots" sostituisce l'intera lista (e i campi flat ne
         # restano lo specchio); i campi flat day/start/end/end_day da soli
@@ -412,6 +440,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             mirror_flat_from_slots(new_rule)
         elif flat_slot_fields_in_data:
             new_rule[CONF_SLOTS] = [slot_from_flat(new_rule)]
+
+        # I campi inviati esplicitamente vuoti vanno tolti dalla regola finale
+        # (dopo il mirror degli slot, così "end"/"end_day" non ricompaiono).
+        for k in removals:
+            new_rule.pop(k, None)
 
         rules[idx] = new_rule
         storage.set_rules(rules)
