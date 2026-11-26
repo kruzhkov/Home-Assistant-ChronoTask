@@ -103,7 +103,7 @@ ChronoTask provides:
 - 🖥 **Weekly Card** with calendar-style layout
 - 🗂 **Tag Manager Card** for bulk operations
 - 📱 **Mobile-friendly UI** (scrolling, adaptive layout, readable)
-- 🌍 **Multi-language UI** — Italian, English, French, German, Spanish, Chinese (auto-detected from Home Assistant, English fallback)
+- 🌍 **Multi-language UI** — Italian, English, French, German, Spanish, Chinese, Russian (auto-detected from Home Assistant, English fallback)
 
 
 ![ChronoTask_2](https://github.com/user-attachments/assets/0f7e469a-06fe-4eff-8d6b-91bcf57c0a5f)

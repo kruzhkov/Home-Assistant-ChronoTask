@@ -21,7 +21,8 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
 class PlannerRulesSensor(SensorEntity):
     _attr_icon = "mdi:calendar-clock"
     _attr_should_poll = False
-    _attr_native_unit_of_measurement = "regole"
+    # Nessuna unità di misura: il valore è un conteggio di regole e una unità
+    # localizzata (es. "regole") resterebbe in italiano per tutti gli utenti.
     # Attributi grandi e che cambiano spesso: non servono nello storico, le
     # automazioni leggono lo stato attuale.
     _unrecorded_attributes = frozenset({"rules", "entities"})

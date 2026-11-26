@@ -101,6 +101,20 @@ const CT_STRINGS={
     upgradeForEditor:'请更新 Home Assistant 以使用高级编辑器。',
     title:'标题', rulesEntityPlanner:'规则实体（计划器）', tag:'标签',
   },
+  ru:{
+    defaultTitle:'ChronoTask — менеджер тегов',
+    enable:'Включить', disable:'Отключить',
+    confirmDisableTag:(n,tag)=>`Отключить правила с тегом #${tag} (${n})?`,
+    servicesUnavailable:'Службы ChronoTask недоступны. Перезапустите Home Assistant и обновите страницу.',
+    bulkError:'Ошибка групповой операции с тегом (см. консоль).',
+    toggleError:'Ошибка обновления правила (см. консоль).',
+    configureRulesEntity:'(настройте rules_entity)',
+    entityNotFound:'Сущность rules_entity не найдена.',
+    noRulesForTag:'Нет правил с этим тегом.',
+    customSuffix:' (своё)',
+    upgradeForEditor:'Обновите Home Assistant, чтобы использовать расширенный редактор.',
+    title:'Название', rulesEntityPlanner:'Сущность правил (планировщик)', tag:'Тег',
+  },
 };
 const { lang: _ctLang, t: _ctT } = makeTranslator(CT_STRINGS);
 function _weekdayNamesShort(lang){
