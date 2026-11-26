@@ -330,10 +330,23 @@ class ChronoTaskWeeklyCard extends HTMLElement{
   getCardSize(){ return 8; }
 
   _t(key,...args){ return _ctT(this._hass,key,...args); }
+  // Lingua effettiva: la card usa `locale` della configurazione se impostata,
+  // altrimenti quella di Home Assistant (mai un default fisso 'it').
+  _locale(){ const l=this._config?.locale; return l || _ctLang(this._hass) || 'en'; }
 
   set hass(hass){
+    const prevLang=this._hass ? _ctLang(this._hass) : null;
     this._hass=hass;
     this._rulesEntityId=this._resolveRulesEntity(hass)||this._rulesEntityId||this._config.rules_entity;
+    const newLang=_ctLang(hass);
+    if(prevLang!==null && prevLang!==newLang){
+      // Cambiata la lingua di HA: i nomi dei giorni nel grid sono già stati
+      // formattati con la vecchia lingua e vanno ricostruiti.
+      this._buildGrid();
+      this._applyI18nStatic();
+      const ttl=this._config?.title;
+      if(this._els?.title && !ttl) this._els.title.textContent=this._t('defaultTitle');
+    }
     this._scheduleUpdate();
   }
 
@@ -560,7 +573,14 @@ _ensureLayout(){
   _toHour(val,fallback=0){ if(typeof val==='number'&&Number.isFinite(val)) return Math.max(0,Math.min(24,val)); if(typeof val==='string'&&val){ const h=parseInt(val.split(':')[0],10); if(Number.isFinite(h)) return Math.max(0,Math.min(24,h)); } return fallback; }
   _getSlotMinutes(){ const v=Number(this._config?.slot_minutes); return [15,30,45,60].includes(v)?v:60; }
   _weekdayFormatForTier(){ return this._sizeTier==='xs' ? 'narrow' : (this._sizeTier==='sm' ? 'short' : 'long'); }
-  _weekdayNames(locale='it',format='long'){ const base=new Date(Date.UTC(2020,10,2)); const fmt=new Intl.DateTimeFormat(locale||'it',{weekday:format}); return Array.from({length:7},(_,i)=>{ const d=new Date(base); d.setUTCDate(base.getUTCDate()+i); return fmt.format(d); }); }
+  _weekdayNames(locale,format='long'){
+    const loc=locale||this._locale()||'en';
+    const base=new Date(Date.UTC(2020,10,2)); // 2 nov 2020 = lunedì
+    let fmt;
+    try{ fmt=new Intl.DateTimeFormat(loc,{weekday:format}); }
+    catch(_){ fmt=new Intl.DateTimeFormat('en',{weekday:format}); }
+    return Array.from({length:7},(_,i)=>{ const d=new Date(base); d.setUTCDate(base.getUTCDate()+i); return fmt.format(d); });
+  }
 
   _onResize(){
     if(this._resizeScheduled) return; this._resizeScheduled=true;
@@ -580,7 +600,7 @@ _ensureLayout(){
   _buildGrid(){
     const g=this._els.grid; if(!g) return;
     g.innerHTML='';
-    const days=this._weekdayNames(this._config.locale,this._weekdayFormatForTier());
+    const days=this._weekdayNames(this._config.locale||this._locale(),this._weekdayFormatForTier());
     g.appendChild(this._cell('','day')); for(const d of days) g.appendChild(this._cell(d,'day'));
     const startHour=this._toHour(this._config.start_hour,6);
     const endHour=this._toHour(this._config.end_hour,22);
@@ -696,7 +716,7 @@ _ensureLayout(){
     block.innerHTML='';
     const icon=(rule.icon&&String(rule.icon).startsWith('mdi:'))?String(rule.icon):'';
     if(icon){ const ic=document.createElement('ha-icon'); ic.setAttribute('icon',icon); block.appendChild(ic); }
-    const label=(rule.title||rule.service||'Action'); const span=document.createElement('span'); span.textContent=label; block.appendChild(span);
+    const label=(rule.title||rule.service||this._t('action')); const span=document.createElement('span'); span.textContent=label; block.appendChild(span);
     const startStr=(rule.start||rule.time||'00:00').slice(0,5); const endStr=(rule.end||startStr).slice(0,5);
     block.title=`${label} — ${startStr}${rule.end?' → '+endStr:''}`;
     block.dataset.day=String(Number(rule.day??rule.weekday??-1));
@@ -1067,7 +1087,7 @@ async _setAllEnabled(enabled){
     block.dataset.tempTs=String(Date.now());
     daycol.appendChild(block);
     this._decorateBlock(block,rule);
-    const span=block.querySelector('span'); if(span) span.textContent+=' (…)';
+    const span=block.querySelector('span'); if(span) span.textContent+=' …';
   }
 
 
@@ -1320,6 +1340,15 @@ async _setAllEnabled(enabled){
     };
     f_entity=buildEntityCombo();
     const getEntityId=()=> (row_entity.querySelector('#f_entity')?.value||'').trim();
+    // Il campo accetta anche più entità separate da virgola: nel payload va
+    // una LISTA (come la produce il selettore di HA), non una stringa, altrimenti
+    // al salvataggio successivo la lista viene appiattita in "a.b, c.d".
+    const getEntityValue=()=>{
+      const raw=getEntityId();
+      const parts=raw.split(',').map(s=>s.trim()).filter(Boolean);
+      if(parts.length>1) return parts;
+      return raw;
+    };
 
 // Prefill existing
 if (existing) {
@@ -1328,7 +1357,7 @@ if (existing) {
       f_id.value = String(existing.id || existing.uid);
     }
 
-    f_title.value = (existing.title || existing.service || 'Action').trim();
+    f_title.value = (existing.title || existing.service || '').trim();
 
     // enabled
     enabledSwitch.checked = existing.enabled !== false;
@@ -1380,8 +1409,9 @@ if (prefill && !existing) {
     const preSelEnd=(existing?.end_service)??(prefill?.end_service)??'';
     const preDataStart=(existing?.service_data)??(prefill?.service_data)??{};
     const preDataEnd=(existing?.end_service_data)??(prefill?.end_service_data)??{};
-    const existingEntityId=preDataStart?.entity_id||preDataEnd?.entity_id||'';
-    if(existingEntityId){ try{ (row_entity.querySelector('#f_entity')||{}).value=existingEntityId; }catch(_){ } }
+    let existingEntityId=preDataStart?.entity_id||preDataEnd?.entity_id||'';
+    if(Array.isArray(existingEntityId)) existingEntityId=existingEntityId.join(', ');
+    if(existingEntityId){ try{ (row_entity.querySelector('#f_entity')||{}).value=String(existingEntityId); }catch(_){ } }
 
     // Dynamic services & fields
     const _getDomain=(entityId)=>{ if(!entityId||typeof entityId!=='string') return ''; const i=entityId.indexOf('.'); return i>0?entityId.slice(0,i):''; };
@@ -1504,7 +1534,7 @@ if (btn_duplicate) {
     ev.preventDefault();
     ev.stopPropagation();
 
-    const eid = getEntityId();
+    const eid = getEntityValue();
 
     const startService = (f_service_sel.value || '').trim();
     const startData = _collectServiceData(svc_fields);
@@ -1524,7 +1554,7 @@ if (btn_duplicate) {
 
     // --- PATCH: dupPrefill senza ID/UID ---
     const dupPrefill = {
-      title: (f_title.value || 'Action').trim(),
+      title: (f_title.value || '').trim(),
       slots: dupSlots.length ? dupSlots : [{ day: 0, start: '08:00' }],
       service: startService,
       service_data: startData,
@@ -1532,7 +1562,7 @@ if (btn_duplicate) {
       ui_color: colorHex,
       enabled: enabledSwitch.checked,
       tags: _tagsToArray(f_tags.value),
-      ...(iconVal ? { icon: iconVal } : {})
+      icon: iconVal
     };
 
     if (endService) {
@@ -1554,7 +1584,7 @@ if (btn_duplicate) {
     // Salva (ADD/EDIT)
     const doSave=async()=>{
       if(!this._hass) return;
-      const eid=getEntityId();
+      const eid=getEntityValue();
       const serviceStart=(f_service_sel.value||'').trim();
       if(!serviceStart){ console.warn(this._t('warnNoStartService')); return; }
 
@@ -1574,14 +1604,16 @@ if (btn_duplicate) {
       }
       const iconVal=this._sanitizeIcon(getIconValue());
       const payload={
-        title:(f_title.value||(existing?.title||existing?.service)||'Action').trim(),
+        title:(f_title.value||(existing?.title||existing?.service)||'').trim(),
         slots,
         service:serviceStart,
         service_data:svcStartData,
         color:colorHex, ui_color:colorHex,
         enabled: !!enabledSwitch.checked,
         tags: _tagsToArray(f_tags.value),
-        ...(iconVal?{icon:iconVal}:{}),
+        // Sempre presente: "" significa "togli l'icona". Omettere il campo
+        // (come prima) rendeva impossibile cancellare un'icona esistente.
+        icon:iconVal,
       };
       const endService=(f_service_sel_end.value||'').trim();
       if(endService){
@@ -1591,6 +1623,9 @@ if (btn_duplicate) {
           if(endData.brightness_pct===0) delete endData.brightness_pct;
         }
         payload.end_service=endService; payload.end_service_data=endData;
+      }else{
+        // "" rimuove l'azione di fine (e i suoi dati) lato backend.
+        payload.end_service='';
       }
 
       const pid=getPlannerId();

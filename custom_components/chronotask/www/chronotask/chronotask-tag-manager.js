@@ -30,6 +30,7 @@ const CT_STRINGS={
     customSuffix:' (personalizzato)',
     upgradeForEditor:"Aggiorna Home Assistant per usare l'editor avanzato.",
     title:'Titolo', rulesEntityPlanner:'Entità regole (planner)', tag:'Tag',
+    action:'Azione',
   },
   en:{
     defaultTitle:'ChronoTask — Tag Manager',
@@ -44,6 +45,7 @@ const CT_STRINGS={
     customSuffix:' (custom)',
     upgradeForEditor:'Update Home Assistant to use the advanced editor.',
     title:'Title', rulesEntityPlanner:'Rules entity (planner)', tag:'Tag',
+    action:'Action',
   },
   fr:{
     defaultTitle:'ChronoTask — Gestionnaire de tags',
@@ -58,6 +60,7 @@ const CT_STRINGS={
     customSuffix:' (personnalisé)',
     upgradeForEditor:"Mettez à jour Home Assistant pour utiliser l'éditeur avancé.",
     title:'Titre', rulesEntityPlanner:'Entité de règles (planificateur)', tag:'Tag',
+    action:'Action',
   },
   de:{
     defaultTitle:'ChronoTask — Tag-Manager',
@@ -72,6 +75,7 @@ const CT_STRINGS={
     customSuffix:' (benutzerdefiniert)',
     upgradeForEditor:'Home Assistant aktualisieren, um den erweiterten Editor zu nutzen.',
     title:'Titel', rulesEntityPlanner:'Regel-Entität (Planer)', tag:'Tag',
+    action:'Aktion',
   },
   es:{
     defaultTitle:'ChronoTask — Gestor de etiquetas',
@@ -86,6 +90,7 @@ const CT_STRINGS={
     customSuffix:' (personalizado)',
     upgradeForEditor:'Actualiza Home Assistant para usar el editor avanzado.',
     title:'Título', rulesEntityPlanner:'Entidad de reglas (planificador)', tag:'Etiqueta',
+    action:'Acción',
   },
   zh:{
     defaultTitle:'ChronoTask — 标签管理器',
@@ -100,6 +105,7 @@ const CT_STRINGS={
     customSuffix:'（自定义）',
     upgradeForEditor:'请更新 Home Assistant 以使用高级编辑器。',
     title:'标题', rulesEntityPlanner:'规则实体（计划器）', tag:'标签',
+    action:'操作',
   },
   ru:{
     defaultTitle:'ChronoTask — менеджер тегов',
@@ -114,6 +120,7 @@ const CT_STRINGS={
     customSuffix:' (своё)',
     upgradeForEditor:'Обновите Home Assistant, чтобы использовать расширенный редактор.',
     title:'Название', rulesEntityPlanner:'Сущность правил (планировщик)', tag:'Тег',
+    action:'Действие',
   },
 };
 const { lang: _ctLang, t: _ctT } = makeTranslator(CT_STRINGS);
@@ -170,7 +177,15 @@ class ChronoTaskTagManagerCard extends HTMLElement {
   }
 
   set hass(hass){
+    const first = !this._hass;
+    const langChanged = !!this._hass && _ctLang(this._hass) !== _ctLang(hass);
     this._hass=hass;
+    if(first || langChanged){
+      /* Ricostruisce la UI quando arriva hass la prima volta o cambia la lingua:
+         i testi statici e i nomi dei giorni devono essere rigenerati. */
+      if(this._config) this._render(); else this._scheduleUpdate();
+      return;
+    }
     this._scheduleUpdate();
   }
 
@@ -417,7 +432,7 @@ class ChronoTaskTagManagerCard extends HTMLElement {
       main.className='main';
       const name=document.createElement('div');
       name.className='name';
-      name.textContent = (r.title || r.service || 'Action');
+      name.textContent = (r.title || r.service || this._t('action'));
       const meta=document.createElement('div');
       meta.className='meta';
       const extraSlots = Array.isArray(r.slots) ? r.slots.length - 1 : 0;
