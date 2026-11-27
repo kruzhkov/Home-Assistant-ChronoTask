@@ -140,6 +140,19 @@ function _uniqSorted(arr){
   return Array.from(new Set((arr||[]).filter(Boolean))).sort((a,b)=>String(a).localeCompare(String(b)));
 }
 
+// Un titolo salvato identico al default di QUALSIASI lingua non è una scelta
+// dell'utente (è il letterale finito nel YAML quando la card è stata aggiunta):
+// va trattato come "non impostato" per lasciare il titolo alla lingua attiva.
+const _defaultTitles=new Set();
+Object.values(CT_STRINGS).forEach(block=>{
+  const v=block && block.defaultTitle;
+  if(typeof v==='string' && v.trim()) _defaultTitles.add(v.trim().toLowerCase());
+});
+function _isStoredDefaultTitle(raw){
+  const s=String(raw==null?'':raw).trim();
+  return !s || _defaultTitles.has(s.toLowerCase());
+}
+
 class ChronoTaskTagManagerCard extends HTMLElement {
   static getConfigElement(){ return document.createElement('chronotask-tag-manager-editor'); }
   static getStubConfig(hass){
@@ -156,7 +169,9 @@ class ChronoTaskTagManagerCard extends HTMLElement {
         }
       }
     }catch(_){}
-    return { title:_ctT(hass,'defaultTitle'), ...(rules_entity?{rules_entity}:{}) , ...(tag?{tag}:{}) };
+    // Nessun `title` di default: se lo scrivessimo resterebbe congelato nella
+    // lingua del momento in cui la card è stata aggiunta.
+    return { ...(rules_entity?{rules_entity}:{}) , ...(tag?{tag}:{}) };
   }
 
   constructor(){
@@ -192,6 +207,13 @@ class ChronoTaskTagManagerCard extends HTMLElement {
   getCardSize(){ return 3; }
 
   _t(key,...args){ return _ctT(this._hass,key,...args); }
+
+  // Titolo scelto dall'utente, oppure undefined se vuoto / uguale a un default
+  // localizzato salvato in precedenza.
+  _customTitle(){
+    const raw=this._config?.title;
+    return _isStoredDefaultTitle(raw) ? undefined : String(raw).trim();
+  }
 
   _scheduleUpdate(){
     if(this._updateScheduled) return;
@@ -362,7 +384,7 @@ class ChronoTaskTagManagerCard extends HTMLElement {
 
     const st=this._getState();
     if(!st){
-      this._els.title.textContent = (this._config.title || this._t('defaultTitle')) + ' — ' + this._t('configureRulesEntity');
+      this._els.title.textContent = (this._customTitle() || this._t('defaultTitle')) + ' — ' + this._t('configureRulesEntity');
       this._els.chip.textContent = `#${this._config.tag}`;
       this._els.list.innerHTML = '';
       const empty=document.createElement('div'); empty.className='empty'; empty.textContent=this._t('entityNotFound');
@@ -371,7 +393,7 @@ class ChronoTaskTagManagerCard extends HTMLElement {
     }
 
     const tag=this._config.tag;
-    this._els.title.textContent = this._config.title || `${this._t('tag')}: ${tag}`;
+    this._els.title.textContent = this._customTitle() || `${this._t('tag')}: ${tag}`;
     this._els.chip.textContent = `#${tag}`;
 
     if(this._servicesAvailable()) this._showWarn('');
@@ -489,7 +511,12 @@ class ChronoTaskTagManagerEditor extends HTMLElement {
   _t(key,...args){ return _ctT(this._hass,key,...args); }
 
   _emitConfigChanged(debounced=true){
-    const fire=()=> this.dispatchEvent(new CustomEvent('config-changed',{ detail:{ config:this._config } }));
+    const fire=()=>{
+      // Non salvare nel YAML un titolo che è solo il default localizzato.
+      const cfg=Object.assign({},this._config);
+      if(_isStoredDefaultTitle(cfg.title)) delete cfg.title;
+      this.dispatchEvent(new CustomEvent('config-changed',{ detail:{ config:cfg } }));
+    };
     if(!debounced){
       if(this._dcTimer){ clearTimeout(this._dcTimer); this._dcTimer=null; }
       fire();

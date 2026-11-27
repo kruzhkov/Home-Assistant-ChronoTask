@@ -298,9 +298,25 @@ const CT_STRINGS={
 };
 const { lang: _ctLang, t: _ctT } = makeTranslator(CT_STRINGS);
 
+// Un titolo salvato che coincide con il default di QUALSIASI lingua (tipico:
+// il letterale inglese finito nel YAML della dashboard quando la card è stata
+// aggiunta) non è una scelta dell'utente: va trattato come "non impostato",
+// così il titolo segue sempre la lingua attiva.
+const _defaultTitles=new Set();
+Object.values(CT_STRINGS).forEach(block=>{
+  const v=block && block.defaultTitle;
+  if(typeof v==='string' && v.trim()) _defaultTitles.add(v.trim().toLowerCase());
+});
+function _isStoredDefaultTitle(raw){
+  const s=String(raw==null?'':raw).trim();
+  return !s || _defaultTitles.has(s.toLowerCase());
+}
+
 class ChronoTaskWeeklyCard extends HTMLElement{
   static getConfigElement(){ return document.createElement('chronotask-weekly-card-editor'); }
-  static getStubConfig(hass){ let rules_entity; try{ if(hass?.states){ rules_entity=Object.keys(hass.states).find(eid=> eid.startsWith('sensor.') && hass.states[eid]?.attributes?.planner_id); } }catch(_){} return { title:_ctT(hass,'defaultTitle'), start_hour:'06:00', end_hour:'22:00', slot_minutes:60, ...(rules_entity?{rules_entity}:{}) }; }
+  // Nessun `title` di default nello stub: se lo scrivessimo resterebbe congelato
+  // nella lingua del momento in cui la card è stata aggiunta.
+  static getStubConfig(hass){ let rules_entity; try{ if(hass?.states){ rules_entity=Object.keys(hass.states).find(eid=> eid.startsWith('sensor.') && hass.states[eid]?.attributes?.planner_id); } }catch(_){} return { start_hour:'06:00', end_hour:'22:00', slot_minutes:60, ...(rules_entity?{rules_entity}:{}) }; }
 
   constructor(){
     super();
@@ -323,13 +339,20 @@ class ChronoTaskWeeklyCard extends HTMLElement{
 
     if(!this.shadowRoot) this.attachShadow({mode:'open'});
     this._ensureLayout();
-    this._els.title.textContent=this._config.title||this._t('defaultTitle');
+    this._els.title.textContent=this._renderTitle();
     this._scheduleUpdate();
   }
 
   getCardSize(){ return 8; }
 
   _t(key,...args){ return _ctT(this._hass,key,...args); }
+  // Titolo scelto dall'utente, oppure undefined se vuoto / uguale a un default
+  // localizzato salvato in precedenza.
+  _customTitle(){
+    const raw=this._config?.title;
+    return _isStoredDefaultTitle(raw) ? undefined : String(raw).trim();
+  }
+  _renderTitle(){ return this._customTitle() || this._t('defaultTitle'); }
   // Lingua effettiva: la card usa `locale` della configurazione se impostata,
   // altrimenti quella di Home Assistant (mai un default fisso 'it').
   _locale(){ const l=this._config?.locale; return l || _ctLang(this._hass) || 'en'; }
@@ -344,8 +367,7 @@ class ChronoTaskWeeklyCard extends HTMLElement{
       // formattati con la vecchia lingua e vanno ricostruiti.
       this._buildGrid();
       this._applyI18nStatic();
-      const ttl=this._config?.title;
-      if(this._els?.title && !ttl) this._els.title.textContent=this._t('defaultTitle');
+      if(this._els?.title) this._els.title.textContent=this._renderTitle();
     }
     this._scheduleUpdate();
   }
@@ -990,10 +1012,10 @@ async _setAllEnabled(enabled){
     this._applyI18nStatic();
 
     if(!this._rulesEntityId||!this._hass.states[this._rulesEntityId]){
-      this._els.title.textContent=`${this._config.title||this._t('defaultTitle')} — ${this._t('configureRulesEntity')}`;
+      this._els.title.textContent=`${this._renderTitle()} — ${this._t('configureRulesEntity')}`;
       return;
     }
-    this._els.title.textContent=this._config.title||this._t('defaultTitle');
+    this._els.title.textContent=this._renderTitle();
 
     // Rimuovi SOLO temp scaduti; non toccare i blocchi pending ottimistici
     try{
@@ -1783,7 +1805,7 @@ class ChronoTaskWeeklyCardEditor extends HTMLElement{
   setConfig(config){ const incoming=config||{}; if(!this._config){ this._config=incoming; this._render(); this._rendered=true; return; } this._config=Object.assign({},this._config,incoming); this._applyConfigToUI(); }
   set hass(hass){ this._hass=hass; if(this._formTop) this._formTop.hass=hass; if(this._formBottom){ this._formBottom.hass=hass; this._refreshDomainSelectSchema(); } }
   _t(key,...args){ return _ctT(this._hass,key,...args); }
-  _emitConfigChanged(debounced=true){ const fire=()=> this.dispatchEvent(new CustomEvent('config-changed',{ detail:{ config:this._config } })); if(!debounced){ if(this._dcTimer){ clearTimeout(this._dcTimer); this._dcTimer=null; } fire(); return;} if(this._dcTimer) clearTimeout(this._dcTimer); this._dcTimer=setTimeout(()=>{ this._dcTimer=null; fire(); },400); }
+  _emitConfigChanged(debounced=true){ const fire=()=>{ const cfg=Object.assign({},this._config); if(_isStoredDefaultTitle(cfg.title)) delete cfg.title; this.dispatchEvent(new CustomEvent('config-changed',{ detail:{ config:cfg } })); }; if(!debounced){ if(this._dcTimer){ clearTimeout(this._dcTimer); this._dcTimer=null; } fire(); return;} if(this._dcTimer) clearTimeout(this._dcTimer); this._dcTimer=setTimeout(()=>{ this._dcTimer=null; fire(); },400); }
   _uniqSorted(arr){ return Array.from(new Set((arr||[]).filter(Boolean))).sort(); }
   _allDomains(){ if(!this._hass) return []; const fromStates=Object.keys(this._hass.states||{}).map(eid=> (typeof eid==='string' && eid.includes('.')) ? eid.split('.')[0] : null); const fromServices=Object.keys(this._hass.services||{}); return this._uniqSorted([...(fromStates||[]), ...(fromServices||[])]); }
   _domainOptions(){ return this._allDomains().map(d=>({ value:d, label:d })); }
@@ -1844,7 +1866,10 @@ class ChronoTaskWeeklyCardEditor extends HTMLElement{
       setTimeout(()=> this._refreshDomainSelectSchema(),0);
     } else {
       const mkRow=(label,id,placeholder='',type='text')=>{ const d=document.createElement('div'); d.className='row'; d.innerHTML=`<label for="${id}">${label}</label><input id="${id}" placeholder="${placeholder}" style="width:100%" type="${type}">`; return d; };
+      // Il placeholder mostra il default localizzato; il value contiene solo una
+      // scelta esplicita dell'utente (un default salvato viene ignorato).
       const title=mkRow(this._t('title'),'f_title',this._t('defaultTitle')); wrap.appendChild(title);
+      { const inp=title.querySelector('#f_title'); const cur=this._config?.title; if(inp && !_isStoredDefaultTitle(cur)) inp.value=String(cur).trim(); }
 
       const colorRow=document.createElement('div');
       colorRow.className='row';
