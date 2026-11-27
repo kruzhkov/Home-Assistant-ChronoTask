@@ -570,8 +570,31 @@ _ensureLayout(){
   }catch(_){ }
 }
 
-  _toHour(val,fallback=0){ if(typeof val==='number'&&Number.isFinite(val)) return Math.max(0,Math.min(24,val)); if(typeof val==='string'&&val){ const h=parseInt(val.split(':')[0],10); if(Number.isFinite(h)) return Math.max(0,Math.min(24,h)); } return fallback; }
+  // "HH:MM" oppure "HH:MM:SS" -> minuti dalla mezzanotte (0..1440).
+  // Prima si leggeva solo la parte intera dell'ora (parseInt su "23:59:59"
+  // dava 23), quindi una fine impostata a 23:59:59 veniva arrotondata a 23:00
+  // e la griglia si fermava un'ora prima del previsto.
+  _toMin(val,fallbackMin=0){
+    if(typeof val==='number'&&Number.isFinite(val)) return Math.max(0,Math.min(1440,Math.round(val)));
+    const m=/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(String(val==null?'':val).trim());
+    if(!m) return fallbackMin;
+    const h=Number(m[1]); const mi=Number(m[2]);
+    if(!Number.isFinite(h)||!Number.isFinite(mi)||h>24||mi>59) return fallbackMin;
+    return Math.max(0,Math.min(1440,h*60+mi));
+  }
   _getSlotMinutes(){ const v=Number(this._config?.slot_minutes); return [15,30,45,60].includes(v)?v:60; }
+
+  // Limiti della griglia in minuti, condivisi da _buildGrid e _computeGeom.
+  // La fine viene arrotondata per eccesso al passo dello slot (senza superare
+  // la mezzanotte) così l'ultima fascia oraria ha sempre la sua riga.
+  _gridBounds(){
+    const slotMin=this._getSlotMinutes();
+    const startMin=this._toMin(this._config?.start_hour,360);
+    let endMin=this._toMin(this._config?.end_hour,1320);
+    if(endMin<=startMin) endMin=Math.min(1440,startMin+slotMin);
+    endMin=Math.min(1440,Math.ceil(endMin/slotMin)*slotMin);
+    return {startMin,endMin,slotMin};
+  }
   _weekdayFormatForTier(){ return this._sizeTier==='xs' ? 'narrow' : (this._sizeTier==='sm' ? 'short' : 'long'); }
   _weekdayNames(locale,format='long'){
     const loc=locale||this._locale()||'en';
@@ -602,10 +625,8 @@ _ensureLayout(){
     g.innerHTML='';
     const days=this._weekdayNames(this._config.locale||this._locale(),this._weekdayFormatForTier());
     g.appendChild(this._cell('','day')); for(const d of days) g.appendChild(this._cell(d,'day'));
-    const startHour=this._toHour(this._config.start_hour,6);
-    const endHour=this._toHour(this._config.end_hour,22);
-    const slotMin=this._getSlotMinutes();
-    let curMin=startHour*60; const endMin=endHour*60;
+    const {startMin,endMin,slotMin}=this._gridBounds();
+    let curMin=startMin;
     while(curMin<endMin){
       const hh=Math.floor(curMin/60); const mm=curMin%60;
       const label=`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
@@ -755,13 +776,13 @@ _ensureLayout(){
   _computeGeom(rule,cont){
     const startStr=(rule.start||rule.time||'00:00').slice(0,5);
     const endStr=(rule.end||startStr).slice(0,5);
-    const startHour=this._toHour(this._config.start_hour,6); const slotMin=this._getSlotMinutes(); const startMinBaseline=startHour*60;
+    const {startMin:startMinBaseline, endMin:gridEndMin, slotMin}=this._gridBounds();
     const startAbsMin=this._hmToMin(startStr); const endAbsMin=this._hmToMin(endStr);
     const day=rule.day??rule.weekday??0; const endDay=rule.end_day;
     const deltaStartSlots=(startAbsMin-startMinBaseline)/slotMin;
     const durationSlots=this._durationSlots(day,endDay,startAbsMin,endAbsMin,slotMin);
     const headerPx=this._headerPx||40, rowPx=this._rowPx||40;
-    const gridBottom=headerPx+((this._toHour(this._config.end_hour,22)*60-startMinBaseline)/slotMin)*rowPx;
+    const gridBottom=headerPx+((gridEndMin-startMinBaseline)/slotMin)*rowPx;
     // Fascia a cavallo di mezzanotte: il blocco del giorno di inizio arriva
     // a fondo griglia, la continuazione parte dall'alto del giorno dopo.
     if(cont==='mid') return {top:headerPx,height:Math.max(20,gridBottom-headerPx)};
@@ -769,7 +790,10 @@ _ensureLayout(){
       const h=((endAbsMin-startMinBaseline)/slotMin)*rowPx;
       return {top:headerPx,height:Math.max(20,Math.min(h,gridBottom-headerPx))};
     }
-    const rawTop=headerPx+(deltaStartSlots*rowPx); const top=Math.max(headerPx,rawTop);
+    // Un inizio oltre la fine della griglia (config ridotta dopo la creazione
+    // della regola) non deve far uscire il blocco dal bordo inferiore.
+    const rawTop=headerPx+(deltaStartSlots*rowPx);
+    const top=Math.min(Math.max(headerPx,rawTop),Math.max(headerPx,gridBottom-20));
     let height=Math.max(20,(durationSlots<=0 ? (1*rowPx) : (durationSlots*rowPx)));
     if(this._effEndDay(day,endDay,startAbsMin,endAbsMin)!==Number(day)) height=Math.max(20,gridBottom-top);
     return {top,height};
@@ -844,7 +868,7 @@ _ensureLayout(){
     const day=Number(sv.day??sv.weekday);
     const endDay=sv.end?this._effEndDay(day,sv.end_day,this._hmToMin(sv.start),this._hmToMin(sv.end)):day;
     const span=(endDay-day+7)%7;
-    const baseline=this._toHour(this._config.start_hour,6)*60;
+    const baseline=this._gridBounds().startMin;
     for(let i=1;i<=span;i++){
       const last=(i===span);
       if(last&&this._hmToMin(sv.end)<=baseline) break;
